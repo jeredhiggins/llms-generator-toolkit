@@ -1,11 +1,13 @@
 services:
   - type: web
-    name: llms-generator-toolkit
-    env: python
+    name: llms-generator
+    runtime: python
+    pythonVersion: "3.11.8"
     buildCommand: |
       pip install -r requirements.txt
-      python3 -m playwright install
-      python3 -m playwright install-deps
-    startCommand: gunicorn app:server 
-    runtime: python
-    pythonVersion: 3.11
+      playwright install
+      playwright install-deps
+    startCommand: gunicorn app:server
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: true
