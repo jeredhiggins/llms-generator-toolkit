@@ -1032,5 +1032,6 @@ def download_md_files(n_clicks):
     return dict(content=encoded_zip, filename="webpage_markdown_files.zip", base64=True)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 8050))
+    app.run_server(host='0.0.0.0', port=port)
 
