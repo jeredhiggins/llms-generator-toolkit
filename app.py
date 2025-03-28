@@ -1,14 +1,16 @@
 import os
 from playwright.async_api import async_playwright
 
-# Verify Chromium installation
+# Configure Playwright for Render
 if "RENDER" in os.environ:
-    playwright_path = "/opt/render/.cache/ms-playwright"
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_path
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
     
-    if not os.path.exists(f"{playwright_path}/chromium-1105/chrome-linux/chrome"):
-        print("Reinstalling Chromium...")
-        os.system("playwright install --force chromium")
+    # Emergency install if missing
+    chrome_path = "/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome"
+    if not os.path.exists(chrome_path):
+        import subprocess
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+        subprocess.run(["playwright", "install-deps"], check=True)
 from pathlib import Path
 import re
 import base64
