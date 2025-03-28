@@ -1,13 +1,19 @@
 services:
   - type: web
-    name: llms-generator
+    name: llms-generator-toolkit
     runtime: python
     pythonVersion: "3.11.8"
     buildCommand: |
+      python -m venv .venv
+      source .venv/bin/activate
+      pip install --upgrade pip
       pip install -r requirements.txt
-      playwright install
-      playwright install-deps
-    startCommand: gunicorn app:server
+      export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright
+      mkdir -p $PLAYWRIGHT_BROWSERS_PATH
+      python -m playwright install chromium
+      python -m playwright install-deps
+    startCommand: .venv/bin/gunicorn app:server
     envVars:
       - key: PYTHONUNBUFFERED
         value: true
+
