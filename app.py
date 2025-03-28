@@ -1,9 +1,10 @@
 import os
 from playwright.async_api import async_playwright
 
-# Configure Playwright for Render
+# Playwright runtime configuration for Render
 if "RENDER" in os.environ:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
+    os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 
 from pathlib import Path
 import re
