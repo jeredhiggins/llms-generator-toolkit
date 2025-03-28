@@ -1,13 +1,15 @@
 #!/bin/bash
 set -e
 
-# Create virtual environment
+# Create and activate virtual environment
 python -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# Install Python dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Install Playwright (Chromium only)
+# Set Playwright cache path and install only Chromium
+export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright
+mkdir -p $PLAYWRIGHT_BROWSERS_PATH
 python -m playwright install chromium
