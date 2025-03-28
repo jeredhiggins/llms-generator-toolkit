@@ -9,7 +9,8 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Set Playwright cache path and install only Chromium
+# Clean existing and reinstall Chromium
 export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright
 mkdir -p $PLAYWRIGHT_BROWSERS_PATH
-python -m playwright install chromium
+rm -rf $PLAYWRIGHT_BROWSERS_PATH/chromium-*  # Remove any existing chromium installs
+python -m playwright install --force chromium
