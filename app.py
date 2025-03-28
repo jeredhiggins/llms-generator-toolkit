@@ -1,17 +1,8 @@
 import os
-from playwright.async_api import async_playwright
-
-# Playwright runtime configuration for Render
-if "RENDER" in os.environ:
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
-    # Ensure the cache directory exists
-    os.makedirs(os.environ["PLAYWRIGHT_BROWSERS_PATH"], exist_ok=True)
-
+from playwright.sync_api import sync_playwright
 from pathlib import Path
 import re
 import base64
-import asyncio
-import nest_asyncio
 from urllib.parse import urljoin, urlparse
 import dash
 from dash import html, dcc, Input, Output, State
@@ -20,95 +11,185 @@ import requests
 from bs4 import BeautifulSoup
 from html2markdown import convert
 
-nest_asyncio.apply()
-
 app = dash.Dash(__name__,
                 external_stylesheets=[dbc.themes.CYBORG],
                 suppress_callback_exceptions=True)
 app.title = "LLMS Generator Toolkit"
 server = app.server
 
-# -----------------------------
-# Utility Functions
-# -----------------------------
-async def ensure_playwright_browser():
-    """Ensure the Playwright browser is properly installed."""
-    from playwright.__main__ import main
-    import sys
-    
-    # Backup original arguments
-    original_argv = sys.argv
-    
-    try:
-        # Set up installation command
-        sys.argv = ['playwright', 'install', 'chromium', '--force']
-        
-        # Run the installation
-        main()
-    finally:
-        # Restore original arguments
-        sys.argv = original_argv
+# Playwright runtime configuration for Render
+if "RENDER" in os.environ:
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
+    os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 
-async def get_browser_instance():
-    """Get a browser instance with proper configuration for Render."""
-    if "RENDER" in os.environ:
-        # On Render, we need to use the cached browser
-        browser = await async_playwright().chromium.launch(
-            headless=True,
-            executable_path="/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome"
-        )
-    else:
-        # Local development
-        browser = await async_playwright().chromium.launch(headless=True)
-    return browser
+
+def get_browser_instance():
+    """Get a sync browser instance."""
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+    return pw, browser
 
 def sanitize_text(text):
-    """Sanitize and normalize text input."""
     if not text:
         return ""
     return ' '.join(text.strip().split())
 
+def sanitize_filename(filename):
+    """
+    Create a clean, URL-safe filename.
+
+    Converts to lowercase, replaces spaces and special characters,
+    ensures filename length, and adds .md extension.
+    """
+    import re
+
+    filename = re.sub(r'^https?://[^/]+', '', filename)
+    filename = re.sub(r'[^\w\-_\.]', '_', filename)
+    filename = re.sub(r'_+', '_', filename)
+    filename = filename[:200]
+    if not filename.endswith('.md'):
+        filename += '.md'
+
+    return filename.strip('_.')
+
 def validate_url(url):
-    """Validate and normalize URL."""
     try:
         parsed = urlparse(url)
         return parsed.scheme and parsed.netloc
     except Exception:
         return False
+    
+def format_tree_md(tree, base_url, indent=0):
+    """Enhanced markdown formatting for navigation tree."""
+    md = ""
+    prefix = "  " * indent
+    for node in tree:
+        if not node.get("url") and not node.get("children"):
+            continue
+
+        title = sanitize_text(node.get("title", "Untitled"))
+
+        if (len(title) < 2 or 
+            title.lower() in ['more', 'menu', 'click here', 'home', 'new']):
+            continue
+
+        if node.get("url"):
+            try:
+                full_url = urljoin(base_url, node.get("url"))
+                parsed_url = urlparse(full_url)
+
+                if (not parsed_url.netloc or 
+                    len(parsed_url.path) > 100 or 
+                    any(x in parsed_url.path.lower() for x in ['#', '?', 'javascript'])):
+                    continue
+
+                md += f"{prefix}- [{title}]({full_url})\n"
+            except Exception:
+                continue
+        else:
+            md += f"{prefix}- {title}\n"
+
+        if node.get("children"):
+            md += format_tree_md(node["children"], base_url, indent + 1)
+
+    return md
 
 def get_homepage_info(url):
-    """Extract homepage title and meta description."""
     try:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
-        
-        # Title extraction with fallbacks
+
         title = (
             soup.title.string.strip() if soup.title and soup.title.string 
             else soup.find('h1').text.strip() if soup.find('h1') 
             else "No Title"
         )
-        
-        # Meta description extraction with fallbacks
+
         meta_el = (
             soup.find("meta", {"name": "description"}) or 
             soup.find("meta", {"property": "og:description"})
         )
         meta = meta_el.get("content", "No Description").strip() if meta_el else "No Description"
-        
+
         return sanitize_text(title), sanitize_text(meta)
     except Exception:
         return "No Title", "No Description"
 
-async def extract_nav_async(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, context_sel):
+def convert_links_to_structured(input_text):
+    import re
+    patterns = [
+        r'\[(.*?)\]\((.*?)\)',
+        r'https?://\S+',
+        r'<a\s+href="(.*?)".*?>(.*?)</a>',
+    ]
+    links = []
+    for pattern in patterns:
+        links.extend(re.findall(pattern, input_text))
+
+    unique_links = {}
+    for link in links:
+        if isinstance(link, tuple):
+            text, url = link
+        else:
+            text, url = link, link
+        url = url.strip()
+        text = sanitize_text(text) or url
+        if validate_url(url):
+            unique_links[url] = text
+
+    return unique_links
+
+def process_webpage_to_markdown(url):
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        md_content = extract_key_content(soup)
+        filename = sanitize_filename(url)
+        return filename, md_content
+    except Exception as e:
+        error_filename = sanitize_filename(url + '_error')
+        return error_filename, f"Error processing {url}: {str(e)}"
+
+def extract_key_content(soup):
     """
-    Enhanced navigation extractor with:
-    - Dynamic content handling
-    - Framework detection and robust selector fallbacks
-    - Shadow DOM support
-    - Optionally using a context selector to narrow down clickable elements
+    Extract the most important content for LLM optimization.
+
+    Prioritizes:
+    - Main content area
+    - Page description
+    - First few paragraphs
+    - Key headings
     """
+    for script in soup(["script", "style", "head", "header", "footer", "nav", "aside"]):
+        script.decompose()
+
+    main_content = soup.find(['main', 'article', 'div.content', 'section.content'])
+    if not main_content:
+        main_content = soup.body
+
+    key_elements = []
+
+    meta_desc = soup.find('meta', {'name': 'description'})
+    if meta_desc and meta_desc.get('content'):
+        key_elements.append(f"# Page Description\n\n{meta_desc['content']}\n")
+
+    title = soup.title.string if soup.title else "Untitled Page"
+    key_elements.append(f"# {title}\n")
+
+    for heading in main_content.find_all(['h1', 'h2', 'h3']):
+        key_elements.append(f"## {heading.get_text(strip=True)}\n")
+
+    paragraphs = main_content.find_all('p', limit=5)
+    for p in paragraphs:
+        text = p.get_text(strip=True)
+        if text:
+            key_elements.append(f"{text}\n")
+
+    return "\n".join(key_elements)
+
+def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, context_sel):
     js_code = """
     function extractNavigation([rootSelector, contextSelector]) {
         // If a context selector is provided and non-empty, use it;
@@ -231,307 +312,36 @@ async def extract_nav_async(homepage_url, age_gate_sel, cookie_sel, root_nav_sel
         return uniqueNodes;
     }
     """
-    
+
+    pw, browser = get_browser_instance()
+    context = browser.new_context()
+    context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+    """)
+    page = context.new_page()
+
     try:
-        # Ensure browser is installed
-        await ensure_playwright_browser()
-        
-        async with async_playwright() as p:
-            browser = await get_browser_instance()
-            context = await browser.new_context()
-            
-            # Spoof navigator.webdriver for compatibility.
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-            """)
-            
-            page = await context.new_page()
-            
+        page.goto(homepage_url, wait_until="networkidle", timeout=90000)
+        page.wait_for_timeout(3000)
+
+        # Dismiss overlays synchronously
+        for selector in filter(None, [age_gate_sel, cookie_sel]):
             try:
-                # Load the page.
-                await page.goto(homepage_url, wait_until="networkidle", timeout=90000)
-                await page.wait_for_timeout(3000)  # Allow extra time for dynamic content.
-                
-                # --- Navigation Toggle Handling ---
-                toggle_selector = '.nav-toggle'  # Adjust as needed.
-                try:
-                    toggle_button = await page.query_selector(toggle_selector)
-                    if toggle_button:
-                        await toggle_button.click()
-                        await page.wait_for_selector('.navigation-menu.expanded', timeout=5000)
-                    # End toggle handling.
-                except Exception as e:
-                    print("Navigation toggle not found or error:", e)
-                
-                # Dismiss overlays (age gate, cookie notices, etc.).
-                async def dismiss_overlays():
-                    selectors = [sel for sel in [age_gate_sel, cookie_sel] if sel]
-                    for selector in selectors:
-                        try:
-                            await page.click(selector, timeout=5000)
-                            await page.wait_for_timeout(1000)
-                        except:
-                            continue
-                await dismiss_overlays()
-                
-                # Try extraction with multiple attempts.
-                tree = []
-                max_attempts = 3
-                for attempt in range(max_attempts):
-                    try:
-                        tree = await page.evaluate(js_code, [root_nav_selector, context_sel])
-                        if tree and len(tree) > 0:
-                            break
-                        await page.wait_for_timeout(2000)
-                        if attempt == 1:
-                            await page.keyboard.press('Tab')
-                            await page.wait_for_timeout(500)
-                            await page.keyboard.press('Enter')
-                            await page.wait_for_timeout(1000)
-                    except Exception as e:
-                        print(f"Attempt {attempt + 1} failed: {str(e)}")
-                        if attempt == max_attempts - 1:
-                            raise e
-                
-                return tree if tree else []
-                
-            except Exception as e:
-                print(f"Extraction error: {str(e)}")
-                return []
-            finally:
-                await browser.close()
+                page.click(selector, timeout=5000)
+                page.wait_for_timeout(1000)
+            except:
+                pass
+
+        tree = page.evaluate(js_code, [root_nav_selector, context_sel])
+        return tree if tree else []
+
     except Exception as e:
-        print(f"Playwright initialization error: {str(e)}")
+        print(f"Extraction error: {e}")
         return []
+    finally:
+        browser.close()
+        pw.stop()
 
-# -----------------------------
-# Helper: Format Navigation Tree as Markdown
-# -----------------------------
-def format_tree_md(tree, base_url, indent=0):
-    """Enhanced markdown formatting for navigation tree."""
-    md = ""
-    prefix = "  " * indent
-    for node in tree:
-        # Enhanced filtering
-        if not node.get("url") and not node.get("children"):
-            continue
-        
-        # Title normalization and filtering
-        title = sanitize_text(node.get("title", "Untitled"))
-        
-        # Skip uninformative titles
-        if (len(title) < 2 or 
-            title.lower() in ['more', 'menu', 'click here', 'home', 'new']):
-            continue
-        
-        # URL processing
-        if node.get("url"):
-            try:
-                full_url = urljoin(base_url, node.get("url"))
-                parsed_url = urlparse(full_url)
-                
-                # Additional URL filtering
-                if (not parsed_url.netloc or 
-                    len(parsed_url.path) > 100 or 
-                    any(x in parsed_url.path.lower() for x in ['#', '?', 'javascript'])):
-                    continue
-                
-                md += f"{prefix}- [{title}]({full_url})\n"
-            except Exception:
-                continue
-        else:
-            md += f"{prefix}- {title}\n"
-        
-        # Recursive children processing
-        if node.get("children"):
-            md += format_tree_md(node["children"], base_url, indent + 1)
-    
-    return md
-
-def convert_links_to_structured(input_text):
-    """Convert various link formats to structured format."""
-    import re
-    
-    # Different link extraction patterns
-    patterns = [
-        r'\[(.*?)\]\((.*?)\)',  # Markdown style: [text](url)
-        r'https?://\S+',         # Raw URLs
-        r'<a\s+href="(.*?)".*?>(.*?)</a>',  # HTML links
-    ]
-    
-    links = []
-    for pattern in patterns:
-        links.extend(re.findall(pattern, input_text))
-    
-    # Deduplicate and structure
-    unique_links = {}
-    for link in links:
-        # Handle different pattern match formats
-        if isinstance(link, tuple):
-            text, url = link
-        else:
-            text, url = link, link
-        
-        # Normalize and validate
-        url = url.strip()
-        text = sanitize_text(text) or url
-        
-        if validate_url(url):
-            unique_links[url] = text
-    
-    return unique_links
-
-def sanitize_filename(filename):
-    """
-    Create a clean, URL-safe filename.
-    
-    Converts to lowercase, replaces spaces and special characters,
-    ensures filename length, and adds .md extension.
-    """
-    import re
-    
-    # Remove protocol and domain, keep path
-    filename = re.sub(r'^https?://[^/]+', '', filename)
-    
-    # Replace problematic characters
-    filename = re.sub(r'[^\w\-_\.]', '_', filename)
-    
-    # Remove consecutive underscores
-    filename = re.sub(r'_+', '_', filename)
-    
-    # Trim filename length
-    filename = filename[:200]
-    
-    # Ensure .md extension
-    if not filename.endswith('.md'):
-        filename += '.md'
-    
-    return filename.strip('_.')
-
-def extract_key_content(soup):
-    """
-    Extract the most important content for LLM optimization.
-    
-    Prioritizes:
-    - Main content area
-    - Page description
-    - First few paragraphs
-    - Key headings
-    """
-    # Remove unnecessary elements
-    for script in soup(["script", "style", "head", "header", "footer", "nav", "aside"]):
-        script.decompose()
-    
-    # Try to find the main content area
-    main_content = soup.find(['main', 'article', 'div.content', 'section.content'])
-    if not main_content:
-        main_content = soup.body
-    
-    # Extract key elements
-    key_elements = []
-    
-    # Add page description if available
-    meta_desc = soup.find('meta', {'name': 'description'})
-    if meta_desc and meta_desc.get('content'):
-        key_elements.append(f"# Page Description\n\n{meta_desc['content']}\n")
-    
-    # Add title
-    title = soup.title.string if soup.title else "Untitled Page"
-    key_elements.append(f"# {title}\n")
-    
-    # Extract key headings and paragraphs
-    for heading in main_content.find_all(['h1', 'h2', 'h3']):
-        key_elements.append(f"## {heading.get_text(strip=True)}\n")
-    
-    # Add first few paragraphs
-    paragraphs = main_content.find_all('p', limit=5)
-    for p in paragraphs:
-        text = p.get_text(strip=True)
-        if text:
-            key_elements.append(f"{text}\n")
-    
-    return "\n".join(key_elements)
-
-def process_webpage_to_markdown(url):
-    """
-    Process a webpage and convert its key content to Markdown.
-    Returns a tuple of (filename, markdown_content)
-    """
-    try:
-        # Fetch the webpage
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        
-        # Parse with BeautifulSoup
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        # Extract key content
-        md_content = extract_key_content(soup)
-        
-        # Generate filename
-        filename = sanitize_filename(url)
-        
-        return filename, md_content
-    
-    except Exception as e:
-        error_filename = sanitize_filename(url + '_error')
-        return error_filename, f"Error processing {url}: {str(e)}"
-
-def convert_urls_to_markdown(n_clicks, input_urls):
-    if not input_urls:
-        return "No URLs provided", True
-    
-    # Process URLs, handling both markdown and plain text input
-    urls = []
-    for line in input_urls.split('\n'):
-        line = line.strip()
-        # Extract URL from markdown or use line directly
-        match = re.search(r'\[.*?\]\((.*?)\)', line)
-        if match:
-            urls.append(match.group(1))
-        elif line.startswith(('http://', 'https://')):
-            urls.append(line)
-    
-    # Track files for download
-    processed_files = {}
-    
-    # Convert URLs to markdown
-    converted_content = []
-    for url in urls:
-        filename, md_content = process_webpage_to_markdown(url)
-        processed_files[filename] = md_content
-        converted_content.append(f"File: {filename}\n{md_content}\n---\n")
-    
-    # Store processed files for download
-    app.server.processed_markdown_files = processed_files
-    
-    return "\n".join(converted_content), False
-
-def download_markdown_files(n_clicks):
-    # Retrieve processed files
-    processed_files = getattr(app.server, 'processed_markdown_files', {})
-    
-    if not processed_files:
-        return None
-    
-    # If only one file, return single file
-    if len(processed_files) == 1:
-        filename, content = list(processed_files.items())[0]
-        return dict(content=content, filename=filename)
-    
-    # Multiple files - create a zip
-    import io
-    import zipfile
-    
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for filename, content in processed_files.items():
-            zip_file.writestr(filename, content)
-    
-    zip_buffer.seek(0)
-    return dict(content=zip_buffer.read(), filename="webpage_markdown_files.zip")
 
 # -----------------------------
 # Application Layout
@@ -878,6 +688,7 @@ dbc.Accordion([
 # -----------------------------
 # Callbacks
 # -----------------------------
+
 @app.callback(
     [Output("nav-output", "value"),
      Output("nav-output", "readOnly"),
@@ -899,83 +710,102 @@ dbc.Accordion([
 def handle_nav_actions(extract_clicks, edit_clicks, homepage_url, age_gate_sel, 
                       cookie_sel, root_nav_selector, context_sel, current_readonly, current_value):
     ctx = dash.callback_context
-    
     if not ctx.triggered:
         raise dash.exceptions.PreventUpdate
-    
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
+
     if triggered_id == "extract-nav-btn":
         if not homepage_url or not root_nav_selector:
             return ("Error: Provide homepage URL and root navigation selector", 
                     True, "📝 Edit Preview", True, True, True)
-        
         try:
-            tree = asyncio.run(
-                extract_nav_async(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, context_sel)
-            )
-            
+            tree = extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, context_sel)
             if not tree:
                 return ("No navigation structure found. Try different selectors.", 
                         True, "📝 Edit Preview", True, True, True)
-            
+
             md_tree = format_tree_md(tree, homepage_url)
             homepage_title, homepage_meta = get_homepage_info(homepage_url)
-            
-            md_lines = [
-                f"# {homepage_title}",
-                "",
-                f"> {homepage_meta}",
-                "",
-                "## Navigation",
-                "",
-                md_tree
-            ]
-            
-            llms_md = "\n".join(md_lines)
+
+            llms_md = f"# {homepage_title}\n\n> {homepage_meta}\n\n## Navigation\n\n{md_tree}"
             return (llms_md, True, "📝 Edit Preview", False, False, False)
-        
+
         except Exception as e:
-            return (f"Error during extraction: {str(e)}", 
-                    True, "📝 Edit Preview", True, True, True)
-    
+            return (f"Error during extraction: {e}", True, "📝 Edit Preview", True, True, True)
+
     elif triggered_id == "edit-nav-btn":
-        if edit_clicks % 2 == 1:
-            return (current_value, False, "💾 Save Preview", 
-                    dash.no_update, dash.no_update, dash.no_update)
-        else:
-            return (current_value, True, "📝 Edit Preview", 
-                    dash.no_update, dash.no_update, dash.no_update)
-    
+        editable = edit_clicks % 2 == 1
+        return (current_value, not editable, "💾 Save Preview" if editable else "📝 Edit Preview",
+                dash.no_update, dash.no_update, dash.no_update)
+
     raise dash.exceptions.PreventUpdate
 
 @app.callback(
-    [Output("homepage-url", "value", allow_duplicate=True),
-     Output("root-nav-selector", "value", allow_duplicate=True),
-     Output("age-gate-selector", "value", allow_duplicate=True),
-     Output("cookie-selector", "value", allow_duplicate=True),
-     Output("context-selector", "value", allow_duplicate=True)],
+    [Output("homepage-url", "value"),
+     Output("root-nav-selector", "value"),
+     Output("age-gate-selector", "value"),
+     Output("cookie-selector", "value"),
+     Output("context-selector", "value")],
     Input("load-lego-example", "n_clicks"),
     prevent_initial_call=True
 )
 def load_lego_example(n_clicks):
-    if n_clicks:
-        return set_lego_defaults(None)
-    raise dash.exceptions.PreventUpdate
+    return (
+        "https://www.lego.com/en-ie",
+        '[data-test="main-navigation"]',
+        '[data-test="age-gate-accept"]',
+        '[data-test="cookie-accept"]',
+        'a[href]:not([href^="#"]), [data-test^="menu"]'
+    )
 
 @app.callback(
-    [Output("converted-links", "value")],
-    [Input("convert-links-btn", "n_clicks")],
-    [State("input-links", "value")],
+    Output("converted-links", "value"),
+    Input("convert-links-btn", "n_clicks"),
+    State("input-links", "value"),
     prevent_initial_call=True
 )
 def convert_links_callback(n_clicks, input_text):
     if not input_text:
-        return ["No input provided"]
-    
+        return "No input provided"
+
     converted = convert_links_to_structured(input_text)
+    if not converted:
+        return "No valid links found."
+
     output_lines = [f"- [{text}]({url})" for url, text in converted.items()]
-    return ["\n".join(output_lines)]
+    return "\n".join(output_lines)
+
+@app.callback(
+    [Output("converted-urls", "value"),
+     Output("download-md-btn", "disabled")],
+    Input("convert-urls-btn", "n_clicks"),
+    State("input-urls", "value"),
+    prevent_initial_call=True
+)
+def convert_urls_to_markdown(n_clicks, input_urls):
+    if not input_urls.strip():
+        return "No URLs provided.", True
+
+    urls = []
+    for line in input_urls.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = re.search(r'\[.*?\]\((.*?)\)', line)
+        if match:
+            urls.append(match.group(1))
+        elif line.startswith(('http://', 'https://')):
+            urls.append(line)
+
+    processed_files = {}
+    converted_content = []
+    for url in urls:
+        filename, md_content = process_webpage_to_markdown(url)
+        processed_files[filename] = md_content
+        converted_content.append(f"File: {filename}\n{md_content}\n---\n")
+
+    app.server.processed_markdown_files = processed_files
+    return "\n".join(converted_content), False
 
 @app.callback(
     Output("download-nav", "data"),
@@ -988,63 +818,6 @@ def download_nav_file(n_clicks, content):
         return dict(content=content, filename="llms.txt")
     return None
 
-@app.callback(
-    [Output("homepage-url", "value"),
-     Output("root-nav-selector", "value"),
-     Output("age-gate-selector", "value"),
-     Output("cookie-selector", "value"),
-     Output("context-selector", "value")],
-    Input("homepage-url", "id"),
-    prevent_initial_call=True
-)
-def set_lego_defaults(input_id):
-    """Pre-populate all fields with working LEGO.com selectors"""
-    return (
-        "https://www.lego.com/en-ie",  # URL
-        '[data-test="main-navigation"]',  # Main nav container
-        '[data-test="age-gate-accept"]',  # Age gate accept button
-        '[data-test="cookie-accept"]',  # Cookie accept button
-        'a[href]:not([href^="#"]), [data-test^="menu"]'  # Context selector
-    )
-
-# Update the URL to Markdown Conversion Callback
-@app.callback(
-    [Output("converted-urls", "value"),
-     Output("download-md-btn", "disabled")],
-    Input("convert-urls-btn", "n_clicks"),
-    State("input-urls", "value"),
-    prevent_initial_call=True
-)
-def convert_urls_to_markdown(n_clicks, input_urls):
-    if not input_urls:
-        return "No URLs provided", True
-    
-    # Process URLs, handling both markdown and plain text input
-    urls = []
-    for line in input_urls.split('\n'):
-        line = line.strip()
-        # Extract URL from markdown or use line directly
-        match = re.search(r'\[.*?\]\((.*?)\)', line)
-        if match:
-            urls.append(match.group(1))
-        elif line.startswith(('http://', 'https://')):
-            urls.append(line)
-    
-    # Track files for download
-    processed_files = {}
-    
-    # Convert URLs to markdown
-    converted_content = []
-    for url in urls:
-        filename, md_content = process_webpage_to_markdown(url)
-        processed_files[filename] = md_content
-        converted_content.append(f"File: {filename}\n{md_content}\n---\n")
-    
-    # Store processed files for download
-    app.server.processed_markdown_files = processed_files
-    
-    return "\n".join(converted_content), False
-
 
 @app.callback(
     Output("download-md", "data"),
@@ -1052,28 +825,25 @@ def convert_urls_to_markdown(n_clicks, input_urls):
     prevent_initial_call=True
 )
 def download_md_files(n_clicks):
-    # Retrieve processed files
     processed_files = getattr(app.server, 'processed_markdown_files', {})
     if not processed_files:
         return None
-    
-    # If only one file, return single file (assume text)
+
     if len(processed_files) == 1:
         filename, content = next(iter(processed_files.items()))
         return dict(content=content, filename=filename)
-    
-    # Multiple files - create a zip
+
     import io, zipfile
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for filename, content in processed_files.items():
             zip_file.writestr(filename, content)
     zip_buffer.seek(0)
-    # Encode zip bytes to base64 string
+
     encoded_zip = base64.b64encode(zip_buffer.read()).decode('utf-8')
     return dict(content=encoded_zip, filename="webpage_markdown_files.zip", base64=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run_server(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)
 
