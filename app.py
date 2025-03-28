@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
+
+# Configure Playwright for Render
 if "RENDER" in os.environ:
-    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/.cache/ms-playwright'
-    os.system('playwright install chromium')
+    playwright_cache = Path("/opt/render/.cache/ms-playwright")
+    playwright_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_cache)
 import re
 import base64
 import asyncio
