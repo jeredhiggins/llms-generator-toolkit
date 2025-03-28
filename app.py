@@ -1,24 +1,25 @@
 import os
-from pathlib import Path
+from playwright.async_api import async_playwright
 
-# Configure Playwright for Render
+# Verify Chromium installation
 if "RENDER" in os.environ:
-    playwright_cache = Path("/opt/render/.cache/ms-playwright")
-    playwright_cache.mkdir(parents=True, exist_ok=True)
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_cache)
+    playwright_path = "/opt/render/.cache/ms-playwright"
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_path
+    
+    if not os.path.exists(f"{playwright_path}/chromium-1105/chrome-linux/chrome"):
+        print("Reinstalling Chromium...")
+        os.system("playwright install --force chromium")
+from pathlib import Path
 import re
 import base64
 import asyncio
 import nest_asyncio
 from urllib.parse import urljoin, urlparse
-
 import dash
 from dash import html, dcc, Input, Output, State
 import dash_bootstrap_components as dbc
-
 import requests
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 from html2markdown import convert
 
 nest_asyncio.apply()
