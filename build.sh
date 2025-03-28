@@ -1,11 +1,13 @@
 #!/bin/bash
 set -e
 
-# Install Python dependencies
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
 
-# Install only Chromium (skip Firefox/WebKit)
+# Install Playwright (Chromium only)
 python -m playwright install chromium
-
-# Skip system dependencies (they're not strictly needed)
-echo "Skipping system dependencies install (not required in Render)"
