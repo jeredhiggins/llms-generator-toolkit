@@ -1,7 +1,7 @@
 import os
 if "RENDER" in os.environ:
-    os.system("playwright install chromium")
-    os.system("playwright install-deps")
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/.cache/ms-playwright'
+    os.system('playwright install chromium')
 import re
 import base64
 import asyncio
