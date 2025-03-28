@@ -4,7 +4,8 @@ from playwright.async_api import async_playwright
 # Playwright runtime configuration for Render
 if "RENDER" in os.environ:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
-    os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
+    # Ensure the cache directory exists
+    os.makedirs(os.environ["PLAYWRIGHT_BROWSERS_PATH"], exist_ok=True)
 
 from pathlib import Path
 import re
@@ -24,12 +25,43 @@ nest_asyncio.apply()
 app = dash.Dash(__name__,
                 external_stylesheets=[dbc.themes.CYBORG],
                 suppress_callback_exceptions=True)
-app.title = "LLMS Generator Tool"
+app.title = "LLMS Generator Toolkit"
 server = app.server
 
 # -----------------------------
 # Utility Functions
 # -----------------------------
+async def ensure_playwright_browser():
+    """Ensure the Playwright browser is properly installed."""
+    from playwright.__main__ import main
+    import sys
+    
+    # Backup original arguments
+    original_argv = sys.argv
+    
+    try:
+        # Set up installation command
+        sys.argv = ['playwright', 'install', 'chromium', '--force']
+        
+        # Run the installation
+        main()
+    finally:
+        # Restore original arguments
+        sys.argv = original_argv
+
+async def get_browser_instance():
+    """Get a browser instance with proper configuration for Render."""
+    if "RENDER" in os.environ:
+        # On Render, we need to use the cached browser
+        browser = await async_playwright().chromium.launch(
+            headless=True,
+            executable_path="/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome"
+        )
+    else:
+        # Local development
+        browser = await async_playwright().chromium.launch(headless=True)
+    return browser
+
 def sanitize_text(text):
     """Sanitize and normalize text input."""
     if not text:
@@ -200,72 +232,80 @@ async def extract_nav_async(homepage_url, age_gate_sel, cookie_sel, root_nav_sel
     }
     """
     
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
+    try:
+        # Ensure browser is installed
+        await ensure_playwright_browser()
         
-        # Spoof navigator.webdriver for compatibility.
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        """)
-        
-        page = await context.new_page()
-        
-        try:
-            # Load the page.
-            await page.goto(homepage_url, wait_until="networkidle", timeout=90000)
-            await page.wait_for_timeout(3000)  # Allow extra time for dynamic content.
+        async with async_playwright() as p:
+            browser = await get_browser_instance()
+            context = await browser.new_context()
             
-            # --- Navigation Toggle Handling ---
-            toggle_selector = '.nav-toggle'  # Adjust as needed.
+            # Spoof navigator.webdriver for compatibility.
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+            
+            page = await context.new_page()
+            
             try:
-                toggle_button = await page.query_selector(toggle_selector)
-                if toggle_button:
-                    await toggle_button.click()
-                    await page.wait_for_selector('.navigation-menu.expanded', timeout=5000)
-                # End toggle handling.
-            except Exception as e:
-                print("Navigation toggle not found or error:", e)
-            
-            # Dismiss overlays (age gate, cookie notices, etc.).
-            async def dismiss_overlays():
-                selectors = [sel for sel in [age_gate_sel, cookie_sel] if sel]
-                for selector in selectors:
-                    try:
-                        await page.click(selector, timeout=5000)
-                        await page.wait_for_timeout(1000)
-                    except:
-                        continue
-            await dismiss_overlays()
-            
-            # Try extraction with multiple attempts.
-            tree = []
-            max_attempts = 3
-            for attempt in range(max_attempts):
+                # Load the page.
+                await page.goto(homepage_url, wait_until="networkidle", timeout=90000)
+                await page.wait_for_timeout(3000)  # Allow extra time for dynamic content.
+                
+                # --- Navigation Toggle Handling ---
+                toggle_selector = '.nav-toggle'  # Adjust as needed.
                 try:
-                    tree = await page.evaluate(js_code, [root_nav_selector, context_sel])
-                    if tree and len(tree) > 0:
-                        break
-                    await page.wait_for_timeout(2000)
-                    if attempt == 1:
-                        await page.keyboard.press('Tab')
-                        await page.wait_for_timeout(500)
-                        await page.keyboard.press('Enter')
-                        await page.wait_for_timeout(1000)
+                    toggle_button = await page.query_selector(toggle_selector)
+                    if toggle_button:
+                        await toggle_button.click()
+                        await page.wait_for_selector('.navigation-menu.expanded', timeout=5000)
+                    # End toggle handling.
                 except Exception as e:
-                    print(f"Attempt {attempt + 1} failed: {str(e)}")
-                    if attempt == max_attempts - 1:
-                        raise e
-            
-            return tree if tree else []
-            
-        except Exception as e:
-            print(f"Extraction error: {str(e)}")
-            return []
-        finally:
-            await browser.close()
+                    print("Navigation toggle not found or error:", e)
+                
+                # Dismiss overlays (age gate, cookie notices, etc.).
+                async def dismiss_overlays():
+                    selectors = [sel for sel in [age_gate_sel, cookie_sel] if sel]
+                    for selector in selectors:
+                        try:
+                            await page.click(selector, timeout=5000)
+                            await page.wait_for_timeout(1000)
+                        except:
+                            continue
+                await dismiss_overlays()
+                
+                # Try extraction with multiple attempts.
+                tree = []
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    try:
+                        tree = await page.evaluate(js_code, [root_nav_selector, context_sel])
+                        if tree and len(tree) > 0:
+                            break
+                        await page.wait_for_timeout(2000)
+                        if attempt == 1:
+                            await page.keyboard.press('Tab')
+                            await page.wait_for_timeout(500)
+                            await page.keyboard.press('Enter')
+                            await page.wait_for_timeout(1000)
+                    except Exception as e:
+                        print(f"Attempt {attempt + 1} failed: {str(e)}")
+                        if attempt == max_attempts - 1:
+                            raise e
+                
+                return tree if tree else []
+                
+            except Exception as e:
+                print(f"Extraction error: {str(e)}")
+                return []
+            finally:
+                await browser.close()
+    except Exception as e:
+        print(f"Playwright initialization error: {str(e)}")
+        return []
+
 # -----------------------------
 # Helper: Format Navigation Tree as Markdown
 # -----------------------------
