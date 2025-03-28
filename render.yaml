@@ -4,13 +4,8 @@ services:
     env: python
     buildCommand: |
       pip install -r requirements.txt
-      python -m playwright install
-      python -m playwright install-deps
-    startCommand: gunicorn app:server
+      python3 -m playwright install
+      python3 -m playwright install-deps
+    startCommand: gunicorn app:server 
     runtime: python
     pythonVersion: 3.11
-    buildFilter:
-      paths:
-        - "**/*.py"
-        - requirements.txt
-        - render.yaml
