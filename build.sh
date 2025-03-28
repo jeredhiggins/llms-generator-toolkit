@@ -1,12 +1,11 @@
 #!/bin/bash
-# render-build.sh
 set -e
 
-echo "-----> Installing Python dependencies"
+# Install Python dependencies
 pip install -r requirements.txt
 
-echo "-----> Installing Playwright browsers"
-python -m playwright install
+# Install only Chromium (skip Firefox/WebKit)
+python -m playwright install chromium
 
-echo "-----> Installing system dependencies for Playwright"
-python -m playwright install-deps
+# Skip system dependencies (they're not strictly needed)
+echo "Skipping system dependencies install (not required in Render)"
