@@ -1,0 +1,8 @@
+dash>=2.0.0
+dash-bootstrap-components
+playwright>=1.40.0
+beautifulsoup4
+requests
+nest-asyncio
+html2markdown
+gunicorn

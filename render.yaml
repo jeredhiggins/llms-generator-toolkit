@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: llms-generator
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install
+      playwright install-deps
+    startCommand: gunicorn app:server
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.16
