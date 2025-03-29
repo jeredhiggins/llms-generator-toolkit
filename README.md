@@ -36,52 +36,105 @@ Try it here → [llms-generator-toolkit.onrender.com](https://llms-generator-too
 
 **Note:** The demo is hosted on Render's free tier plan, so the navigation extraction feature may be slow to respond. This is due to free tier limitations rather than issues with the application itself. For faster performance, consider running the application locally.
 
-## 🔧 Tech Highlights
+## 🤓 Tech Highlights
 
 - Built with [Dash](https://dash.plotly.com) for reactive Python UI
 - Uses [Playwright](https://playwright.dev/python/) to scrape dynamic websites
 - HTML parsing via BeautifulSoup + semantic Markdown generation
 - Runs on [Render](https://render.com) with Chromium sandboxing enabled
 
-## Installation
+## 🔧 Installation
 
-### Prerequisites
+### 📋 Prerequisites
 
-- Python 3.7+
-- pip package manager
+- Python 3.8+ (Python 3.11+ recommended)
+- `pip` package manager
+- [Playwright](https://playwright.dev/python/) (installed automatically)
 
-### Setup
+### 📦 Local Setup
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/llms-generator-tool.git
-   cd llms-generator-tool
-   ```
+#### 1. Clone this repository:
 
-2. Create and activate a virtual environment (recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+```bash
+git clone https://github.com/jeredhiggins/llms-generator-toolkit.git
+cd llms-generator-toolkit
+```
 
-3. Install the required dependencies:
-   ```bash
-   pip install dash dash-bootstrap-components requests beautifulsoup4 playwright html2markdown diskcache nest-asyncio
-   ```
+#### 2. Create and activate a virtual environment:
 
-4. Install Playwright browsers:
-   ```bash
-   python -m playwright install chromium
-   ```
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
 
-## Usage
+#### 3. Install Python dependencies:
 
-1. Start the application:
-   ```bash
-   python app.py
-   ```
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-2. Open your web browser and navigate to `http://127.0.0.1:8050`
+#### 4. Install the Playwright browser (Chromium only):
+
+```bash
+python -m playwright install chromium
+```
+
+---
+
+## 🚀 Usage
+
+#### Start the application:
+
+```bash
+python app.py
+```
+
+Then open your browser at:
+
+```
+http://127.0.0.1:8050
+```
+
+---
+
+## 🌐 Deployment on Render
+
+This project is configured to deploy easily on [Render](https://render.com/).
+
+#### Key Notes:
+
+- Chromium is installed manually during the build without `--with-deps`
+- The browser cache is stored at `/opt/render/.cache/ms-playwright`
+- No system-level dependencies are required due to a clean headless setup
+
+Your `render.yaml` handles all of this automatically:
+
+```yaml
+buildCommand: |
+  python -m venv .venv
+  source .venv/bin/activate
+  pip install --upgrade pip
+  pip install -r requirements.txt
+  mkdir -p /opt/render/.cache/ms-playwright
+  python -m playwright install --force chromium
+```
+
+The app is started using `gunicorn`:
+
+```yaml
+startCommand: .venv/bin/gunicorn --bind 0.0.0.0:$PORT --timeout 600 app:server
+```
+
+#### Environment variables:
+
+```yaml
+envVars:
+  - key: PYTHONUNBUFFERED
+    value: true
+  - key: PLAYWRIGHT_BROWSERS_PATH
+    value: /opt/render/.cache/ms-playwright
+```
 
 ### Navigation Extraction
 
@@ -238,55 +291,6 @@ else:
 - Do not use this tool to bypass paywalls, login requirements, or access restricted content
 - Consider the load your scraping puts on the target websites, especially smaller sites
 - When in doubt, contact the website owner for permission
-
-## Troubleshooting
-
-### macOS Fork Safety Error
-
-If you encounter an error related to fork safety on macOS:
-
-```
-objc[...]: +[__NSCFConstantString initialize] may have been in progress in another thread when fork() was called.
-```
-
-This is addressed in the code with:
-
-```python
-os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
-```
-
-Ensure this line appears at the very top of your script, before any imports.
-
-### Alternative Solutions:
-
-1. Use the `if __name__ == '__main__'` guard:
-   ```python
-   if __name__ == '__main__':
-       os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
-       app.run(debug=True)
-   ```
-
-2. Change the multiprocessing start method:
-   ```python
-   import multiprocessing
-   multiprocessing.set_start_method('spawn')  # Use 'spawn' instead of 'fork'
-   ```
-
-## Advanced Configuration
-
-### Customizing Navigation Extraction
-
-- **Root Navigation Selector**: Specify the CSS selector for the primary navigation element
-- **Context Selector**: Define which clickable elements should be considered in the navigation tree
-- **Dynamic Content Handling**: The tool supports dynamic websites built with React, Vue, Angular, and other frameworks
-
-### Optimizing Markdown Output
-
-The URL to Markdown feature extracts:
-- Page title and meta description
-- Key headings (H1, H2, H3)
-- First few paragraphs of main content
-- Structured content formatted for LLM consumption
 
 ## Contributing
 
