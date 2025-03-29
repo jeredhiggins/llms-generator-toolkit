@@ -1,4 +1,5 @@
 import os
+import sys
 from playwright.sync_api import sync_playwright
 from pathlib import Path
 import re
@@ -11,33 +12,54 @@ import requests
 from bs4 import BeautifulSoup
 from html2markdown import convert
 
-app = dash.Dash(__name__,
-                external_stylesheets=[dbc.themes.CYBORG],
-                suppress_callback_exceptions=True)
+# Initialize Dash app
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.CYBORG],
+    suppress_callback_exceptions=True
+)
 app.title = "LLMS Generator Toolkit"
 server = app.server
 
-# Playwright runtime configuration for Render
+# Playwright configuration for Render
 if "RENDER" in os.environ:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
-    os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
+    os.makedirs(os.environ["PLAYWRIGHT_BROWSERS_PATH"], exist_ok=True)
+    
+    # Verify browser exists, reinstall if missing
+    browser_path = "/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome"
+    if not os.path.exists(browser_path):
+        print("Chromium not found, reinstalling...")
+        from playwright.__main__ import main
+        sys.argv = ['', 'install', 'chromium', '--force']
+        main()
 
 def get_browser_instance():
-    pw = sync_playwright().start()
-
-    chromium_args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--no-first-run",
-        "--no-zygote",
-        "--single-process",
-        "--disable-gpu"
-    ]
-
-    browser = pw.chromium.launch(headless=True, args=chromium_args)
-    return pw, browser
+    """Get a browser instance with Render-specific configuration"""
+    try:
+        playwright = sync_playwright().start()
+        browser = playwright.chromium.launch(
+            headless=True,
+            executable_path="/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome",
+            args=[
+                '--single-process',
+                '--no-zygote',
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-setuid-sandbox',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run'
+            ]
+        )
+        return playwright, browser
+    except Exception as e:
+        print(f"Failed to launch browser: {str(e)}")
+        raise
+      
+# -----------------------------
+# Utility Functions
+# -----------------------------
 
 def sanitize_text(text):
     if not text:
@@ -199,15 +221,13 @@ def extract_key_content(soup):
 
     return "\n".join(key_elements)
 
-def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, context_sel):
+def extract_nav_sync(homepage_url, age_gate_sel=None, cookie_sel=None, root_nav_selector=None, context_sel=None):
+    """Synchronous navigation extraction with JS evaluation"""
     js_code = """
     function extractNavigation([rootSelector, contextSelector]) {
-        // If a context selector is provided and non-empty, use it;
-        // otherwise, default to anchors with href.
         const clickableSelector = (contextSelector && contextSelector.trim().length > 0) ? 
             contextSelector : 'a[href]';
         
-        // Enhanced framework detection
         const frameworkDetectors = {
             react: () => !!document.querySelector('[data-reactroot], [data-reactid], [data-react], .ReactModal__Overlay'),
             vue: () => !!document.querySelector('[data-v-app], [data-vue], [v-], .v-application'),
@@ -221,12 +241,10 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
             .filter(([_, detector]) => detector())
             .map(([name]) => name);
         
-        // Special handling for known sites
         const isLego = window.location.hostname.includes('lego.com');
         const isShopify = window.location.hostname.includes('shopify.com') || 
                           !!document.querySelector('[data-shopify]');
         
-        // Get all possible root elements with multiple fallbacks
         const getRootElements = () => {
             const selectors = [
                 rootSelector,
@@ -239,18 +257,16 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
                 '[class*="nav"]',
                 '[id*="nav"]',
                 isLego ? '[data-test="desktop-navigation"]' : null,
-                isShopify ? '[data-section-type="header"]' : null
+                isShopify ? '[data-sectiontype="header"]' : null
             ].filter(Boolean);
             
             return Array.from(document.querySelectorAll(selectors.join(',')));
         };
         
-        // Enhanced node extraction with support for shadow DOM.
         const extractNodes = (element) => {
             const rootNode = element.getRootNode();
             const isShadow = rootNode !== document;
             
-            // Get clickable elements using clickableSelector.
             const links = Array.from(isShadow ? 
                 rootNode.querySelectorAll(clickableSelector) : 
                 element.querySelectorAll(clickableSelector));
@@ -262,7 +278,6 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
                     children: [] 
                 };
                 
-                // Prefer aria-label or inner text for title.
                 node.title = link.getAttribute('aria-label') || 
                              link.textContent.trim() || 
                              link.getAttribute('data-testid') || 
@@ -270,17 +285,14 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
                              link.getAttribute('title') || 
                              "Untitled Link";
                 
-                // Only set URL if it's an anchor.
                 if (link.tagName === 'A') {
                     node.url = link.href;
                 }
                 
-                // Check for nested menus (if element is within a list item).
                 const parentLi = link.closest('li');
                 let nestedMenu = null;
                 if (parentLi) {
                     nestedMenu = parentLi.querySelector(':scope > ul');
-                    // Additional framework-specific or site-specific checks.
                     if (!nestedMenu) {
                         if (detectedFrameworks.includes('react')) {
                             nestedMenu = parentLi.querySelector('[role="menu"], [aria-labelledby]');
@@ -310,7 +322,6 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
             allNodes.push(...extractNodes(root));
         });
         
-        // Deduplicate nodes by URL.
         const uniqueNodes = [];
         const seenUrls = new Set();
         allNodes.forEach(node => {
@@ -322,36 +333,58 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
         return uniqueNodes;
     }
     """
-
-    pw, browser = get_browser_instance()
-    context = browser.new_context()
-    context.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-    """)
-    page = context.new_page()
-
+    
+    playwright, browser = None, None
     try:
+        playwright, browser = get_browser_instance()
+        context = browser.new_context()
+        page = context.new_page()
+        
+        # Load the page
         page.goto(homepage_url, wait_until="networkidle", timeout=90000)
         page.wait_for_timeout(3000)
-
-        # Dismiss overlays synchronously
-        for selector in filter(None, [age_gate_sel, cookie_sel]):
+        
+        # Handle overlays
+        def dismiss_overlays():
+            selectors = [sel for sel in [age_gate_sel, cookie_sel] if sel]
+            for selector in selectors:
+                try:
+                    page.click(selector, timeout=5000)
+                    page.wait_for_timeout(1000)
+                except:
+                    continue
+        
+        dismiss_overlays()
+        
+        # Execute JS extraction
+        tree = []
+        max_attempts = 3
+        for attempt in range(max_attempts):
             try:
-                page.click(selector, timeout=5000)
-                page.wait_for_timeout(1000)
-            except:
-                pass
-
-        tree = page.evaluate(js_code, [root_nav_selector, context_sel])
+                tree = page.evaluate(js_code, [root_nav_selector, context_sel])
+                if tree and len(tree) > 0:
+                    break
+                page.wait_for_timeout(2000)
+                if attempt == 1:
+                    page.keyboard.press('Tab')
+                    page.wait_for_timeout(500)
+                    page.keyboard.press('Enter')
+                    page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_attempts - 1:
+                    raise
+        
         return tree if tree else []
-
+        
     except Exception as e:
-        print(f"Extraction error: {e}")
+        print(f"Extraction error: {str(e)}")
         return []
     finally:
-        browser.close()
-        pw.stop()
-
+        if browser:
+            browser.close()
+        if playwright:
+            playwright.stop()
 
 # -----------------------------
 # Application Layout
@@ -695,9 +728,8 @@ dbc.Accordion([
 ], fluid=True)
 
 # -----------------------------
-# Callbacks
+# Callbacks (Updated for synchronous operation)
 # -----------------------------
-
 @app.callback(
     [Output("nav-output", "value"),
      Output("nav-output", "readOnly"),
@@ -719,36 +751,54 @@ dbc.Accordion([
 def handle_nav_actions(extract_clicks, edit_clicks, homepage_url, age_gate_sel, 
                       cookie_sel, root_nav_selector, context_sel, current_readonly, current_value):
     ctx = dash.callback_context
+    
     if not ctx.triggered:
         raise dash.exceptions.PreventUpdate
+    
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
-
+    
     if triggered_id == "extract-nav-btn":
         if not homepage_url or not root_nav_selector:
             return ("Error: Provide homepage URL and root navigation selector", 
                     True, "📝 Edit Preview", True, True, True)
+        
         try:
             tree = extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, context_sel)
+            
             if not tree:
                 return ("No navigation structure found. Try different selectors.", 
                         True, "📝 Edit Preview", True, True, True)
-
+            
             md_tree = format_tree_md(tree, homepage_url)
             homepage_title, homepage_meta = get_homepage_info(homepage_url)
-
-            llms_md = f"# {homepage_title}\n\n> {homepage_meta}\n\n## Navigation\n\n{md_tree}"
+            
+            md_lines = [
+                f"# {homepage_title}",
+                "",
+                f"> {homepage_meta}",
+                "",
+                "## Navigation",
+                "",
+                md_tree
+            ]
+            
+            llms_md = "\n".join(md_lines)
             return (llms_md, True, "📝 Edit Preview", False, False, False)
-
+        
         except Exception as e:
-            return (f"Error during extraction: {e}", True, "📝 Edit Preview", True, True, True)
-
+            return (f"Error during extraction: {str(e)}", 
+                    True, "📝 Edit Preview", True, True, True)
+    
     elif triggered_id == "edit-nav-btn":
-        editable = edit_clicks % 2 == 1
-        return (current_value, not editable, "💾 Save Preview" if editable else "📝 Edit Preview",
-                dash.no_update, dash.no_update, dash.no_update)
-
+        if edit_clicks % 2 == 1:
+            return (current_value, False, "💾 Save Preview", 
+                    dash.no_update, dash.no_update, dash.no_update)
+        else:
+            return (current_value, True, "📝 Edit Preview", 
+                    dash.no_update, dash.no_update, dash.no_update)
+    
     raise dash.exceptions.PreventUpdate
-
+                        
 @app.callback(
     [Output("homepage-url", "value"),
      Output("root-nav-selector", "value"),
