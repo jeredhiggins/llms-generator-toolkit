@@ -23,7 +23,10 @@ if "RENDER" in os.environ:
     os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 
 def get_browser_instance():
-    """Get a sync browser instance."""
+    from playwright.sync_api import sync_playwright
+    import os
+    import glob
+
     pw = sync_playwright().start()
 
     chromium_args = [
@@ -37,14 +40,23 @@ def get_browser_instance():
         "--disable-gpu"
     ]
 
+    executable_path = None
+
     if "RENDER" in os.environ:
-        browser = pw.chromium.launch(
-            headless=True,
-            executable_path="/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome",
-            args=chromium_args
-        )
-    else:
-        browser = pw.chromium.launch(headless=True, args=chromium_args)
+        browsers_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "/opt/render/.cache/ms-playwright")
+        chromium_executables = glob.glob(f"{browsers_path}/chromium-*/chrome-linux/chrome")
+
+        if not chromium_executables:
+            raise FileNotFoundError(f"No Chromium executable found in {browsers_path}")
+
+        # Pick the latest installed chromium executable
+        executable_path = chromium_executables[-1]
+
+    browser = pw.chromium.launch(
+        headless=True,
+        executable_path=executable_path,
+        args=chromium_args
+    )
 
     return pw, browser
 
