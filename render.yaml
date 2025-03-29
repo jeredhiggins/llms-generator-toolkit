@@ -8,12 +8,11 @@ services:
       source .venv/bin/activate
       pip install --upgrade pip
       pip install -r requirements.txt
-      playwright install chromium
-    startCommand: .venv/bin/gunicorn app:server --bind 0.0.0.0:$PORT --timeout 600
+      mkdir -p /opt/render/.cache/ms-playwright
+      python -m playwright install --force chromium
+    startCommand: .venv/bin/gunicorn --bind 0.0.0.0:$PORT --timeout 600 app:server
     envVars:
       - key: PYTHONUNBUFFERED
         value: true
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: /opt/render/.cache/ms-playwright
-
-
