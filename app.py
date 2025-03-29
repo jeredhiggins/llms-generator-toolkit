@@ -23,10 +23,6 @@ if "RENDER" in os.environ:
     os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 
 def get_browser_instance():
-    from playwright.sync_api import sync_playwright
-    import os
-    import glob
-
     pw = sync_playwright().start()
 
     chromium_args = [
@@ -40,23 +36,7 @@ def get_browser_instance():
         "--disable-gpu"
     ]
 
-    executable_path = None
-
-    if "RENDER" in os.environ:
-        browsers_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "/opt/render/.cache/ms-playwright")
-        chromium_executables = glob.glob(f"{browsers_path}/chromium-*/chrome-linux/chrome")
-
-        if not chromium_executables:
-            raise FileNotFoundError(f"No Chromium executable found in {browsers_path}")
-
-        # Pick the latest installed chromium executable
-        executable_path = chromium_executables[-1]
-
-    browser = pw.chromium.launch(
-        headless=True,
-        executable_path=executable_path,
-        args=chromium_args
-    )
+    browser = pw.chromium.launch(headless=True, args=chromium_args)
 
     return pw, browser
 
@@ -271,7 +251,7 @@ def extract_nav_sync(homepage_url, age_gate_sel, cookie_sel, root_nav_selector, 
             const rootNode = element.getRootNode();
             const isShadow = rootNode !== document;
             
-            // Get clickable elements using our clickableSelector.
+            // Get clickable elements using clickableSelector.
             const links = Array.from(isShadow ? 
                 rootNode.querySelectorAll(clickableSelector) : 
                 element.querySelectorAll(clickableSelector));
@@ -389,7 +369,6 @@ app.layout = dbc.Container([
         dbc.Tab(label="1. Extract Navigation Links (in markdown format)", tab_id="nav-tab", children=[
             dbc.Card([
                 dbc.CardBody([
-                    # Selector Guidance Accordion
                     # Selector Guidance Accordion
 dbc.Accordion([
     dbc.AccordionItem(
@@ -848,7 +827,6 @@ def download_nav_file(n_clicks, content):
     if content and "Error" not in content:
         return dict(content=content, filename="llms.txt")
     return None
-
 
 @app.callback(
     Output("download-md", "data"),
