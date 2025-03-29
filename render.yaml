@@ -4,16 +4,12 @@ services:
     runtime: python
     pythonVersion: "3.11.8"
     buildCommand: |
-      python -m venv .venv
-      source .venv/bin/activate
-      pip install --upgrade pip
       pip install -r requirements.txt
-      export PLAYWRIGHT_BROWSERS_PATH=/opt/render/.cache/ms-playwright
-      mkdir -p $PLAYWRIGHT_BROWSERS_PATH
-      python -m playwright install chromium
-      python -m playwright install-deps
-    startCommand: .venv/bin/gunicorn app:server
+      playwright install chromium
+      playwright install-deps chromium
+    startCommand: gunicorn app:server --bind 0.0.0.0:$PORT --timeout 600
     envVars:
       - key: PYTHONUNBUFFERED
         value: true
-
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/.cache/ms-playwright
