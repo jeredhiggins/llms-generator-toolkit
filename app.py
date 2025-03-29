@@ -22,11 +22,30 @@ if "RENDER" in os.environ:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/render/.cache/ms-playwright"
     os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
 
-
 def get_browser_instance():
     """Get a sync browser instance."""
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+
+    chromium_args = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--no-first-run",
+        "--no-zygote",
+        "--single-process",
+        "--disable-gpu"
+    ]
+
+    if "RENDER" in os.environ:
+        browser = pw.chromium.launch(
+            headless=True,
+            executable_path="/opt/render/.cache/ms-playwright/chromium-1105/chrome-linux/chrome",
+            args=chromium_args
+        )
+    else:
+        browser = pw.chromium.launch(headless=True, args=chromium_args)
+
     return pw, browser
 
 def sanitize_text(text):
