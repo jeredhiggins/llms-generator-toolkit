@@ -37,7 +37,6 @@ def get_browser_instance():
     ]
 
     browser = pw.chromium.launch(headless=True, args=chromium_args)
-
     return pw, browser
 
 def sanitize_text(text):
